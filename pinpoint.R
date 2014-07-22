@@ -1,3 +1,62 @@
+rgb2cmyk = function(img2)
+{
+    img2 = img2[,,1:3]
+    img2.1 = img2[,,1]
+    img2.2 = img2[,,2]
+    img2.3 = img2[,,3]
+    
+    K = img2.1
+    K[img2.2 > K] = img2.2[img2.2 > K]
+    K[img2.3 > K] = img2.3[img2.3 > K]
+    K = 1 - K
+
+    #K = 1 - apply(img2, 1:2, max)
+    
+    C = (1-img2.1-K) / (1-K)
+    M = (1-img2.2-K) / (1-K)
+    Y = (1-img2.3-K) / (1-K)
+    
+    
+    library(abind)
+    abind(C, M, Y, K, along=3)
+}
+
+computeFeatures.basic2 = function(mask2, img2, layers="rgb")
+{
+    res = NULL
+    if(length(dim(img)) == 2)
+    {   
+        res = as.data.frame(computeFeatures.basic(mask2, img2))
+    } else {
+        if(length(layers) == 1) layers.v = unlist(strsplit(layers, ""))
+        else layers.v = layers
+        
+        for(i in 1:dim(img)[3])    
+        {
+            res.tmp = as.data.frame(computeFeatures.basic(mask2, img2[,,i]))
+            colnames(res.tmp) = paste0(layers.v[i], ".", colnames(res.tmp))
+            
+            if(is.null(res)) res = res.tmp
+            else res = cbind(res, res.tmp)
+        }
+    }   
+    
+    res
+}
+
+rgb2hsv = function(v)
+{
+    a = grDevices::rgb2hsv(as.numeric(v[,,1]), as.numeric(v[,,2]), as.numeric(v[,,3]), maxColorValue=1)
+    v.hsv = v    
+    v.hsv[,,1] = a[1,]
+    v.hsv[,,2] = a[2,]
+    v.hsv[,,3] = a[3,]
+    colorMode(v.hsv) = Grayscale
+    
+    v.hsv
+}
+
+
 
 displayc = function(mask, img, method="browser")
 {
@@ -272,9 +331,9 @@ find.grid = function(img.bw, format, r=find.radius(img.bw), trace=1, p=F)
     mask.inv[,1:(min(cy) - 2*r)] = 1    
     sy = find.peaks(mask.inv, fdim+1, r, margin=2, p=p)
     sx = find.peaks(mask.inv, fdim+1, r, margin=1, p=p)
-    sy[1] = 2*sy[2] - sy[3]; sx[1] = 2*sx[2] - sx[3]
-    sy[length(sy)] = 2*sy[length(sy)-1] - sy[length(sy)-2]
-    sx[length(sx)] = 2*sx[length(sx)-1] - sx[length(sx)-2]
+    #sy[1] = 2*sy[2] - sy[3]; sx[1] = 2*sx[2] - sx[3]
+    #sy[length(sy)] = 2*sy[length(sy)-1] - sy[length(sy)-2]
+    #sx[length(sx)] = 2*sx[length(sx)-1] - sx[length(sx)-2]
     sx = round(sx)
     sy = round(sy)
     
@@ -413,21 +472,16 @@ find.pins = function(img.bw, format, p=F)
     seeds = mask
     seeds[T] = 0
     seeds[ret$data$x, ret$data$y] = mask[ret$data$x, ret$data$y]
-    display(seeds)
     mask.prop = propagate(img.bw, seeds, mask)
-    displayc(mask.prop, img.bw)
-    
-    display(opening(mask > 0), makeBrush(round.odd(r/2), "disc"))
-    display(mask)
-    
-    
+        
     if(p)
     {
         displayc(EBImage::tile(mask.stack, fg.col="#000000", nx=fdim[2]), EBImage::tile(img.bw.stack, fg.col=gray(mean(bg)), nx=fdim[2]))
+        displayc(mask.prop, img.bw)
         EBImage::display(EBImage::tile(mask.stack.b, 48))
     }
     
-    mask.stack
+    list(mask.pins=mask.prop, mask.sqr=ret$mask, data=ret$data)
 }
 
 
@@ -446,15 +500,15 @@ parse.file = function()
     img.big = EBImage::readImage(file)
     img = EBImage::resize(img.big, nrow(img.big)/3, ncol(img.big)/3)
     img.bw = EBImage::channel(img, "grey")
+    img.hsv = rgb2hsv(img)
+    img.cmyk = rgb2cmyk(img)
     
-    ret = find.pins(img.bw, format)
-    EBImage::display(EBImage::tile(ret, 48)/1576)
+    ret = find.pins(img.bw, format, p=T)
     
-    displayc(EBImage::tile(ret, fg.col="#000000", nx=fdim[2]), EBImage::tile(ret, fg.col=gray(mean(bg)), nx=fdim[2]))
-    EBImage::display(EBImage::tile(mask.stack.b, 48))
-    
-    # Improve performance!
-    # 1. Work on convert to black and white
-    # Detect frame around pins
+    img.ftrs = computeFeatures.shape(ret$mask.pins)
+    img.ftrs = cbind(img.ftrs, computeFeatures.moment(ret$mask.pins))
+    img.ftrs = cbind(img.ftrs, computeFeatures.basic2(ret$mask.pins, img, c("red", "green", "blue")))
+    img.ftrs = cbind(img.ftrs, computeFeatures.basic2(ret$mask.pins, img.cmyk, c("cyan", "magenta", "yellow", "black")))
+    img.ftrs = cbind(img.ftrs, computeFeatures.basic2(ret$mask.pins, img.hsv, c("hue", "saturation", "value")))
     
 }
