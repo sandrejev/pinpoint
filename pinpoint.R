@@ -420,25 +420,6 @@ find.pins = function(img.bw, format, p=F)
     display(opening(mask > 0), makeBrush(round.odd(r/2), "disc"))
     display(mask)
     
-    mask = ret$mask
-    mask[T] = 0
-    stack.midx = round(nrow(img.bw.stack.orig)/2)
-    stack.midy = round(ncol(img.bw.stack.orig)/2)
-    for(i in 1:max(mask.stack))
-    {
-        #writeLines(paste(i))
-        rle.y = rle(as.numeric(img.bw.stack.orig[stack.midx,,i]))
-        rle.x = rle(as.numeric(img.bw.stack.orig[,stack.midy,i]))
-        offset = list(
-            yt = ifelse(rle.x$values[1] == -1, rle.x$lengths[1] + 1, 1),
-            yb = ncol(img.bw.stack.orig) - ifelse(last(rle.x$values) == -1, last(rle.x$lengths), 0),
-            xl = ifelse(rle.x$values[1] == -1, rle.y$lengths[1] + 1, 1),
-            xr = nrow(img.bw.stack.orig) - ifelse(last(rle.y$values) == -1, last(rle.y$lengths), 0)
-        )
-
-        mask[with(ret$data[i,], xl:xr), with(ret$data[i,], yt:yb)] = with(offset, mask.stack[,,i][yt:yb, xl:xr])
-    }
-
     
     if(p)
     {
