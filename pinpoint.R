@@ -47,7 +47,7 @@ computeFeatures.basic2 = function(mask2, img2, layers="rgb")
 rgb2hsv = function(v)
 {
     a = grDevices::rgb2hsv(as.numeric(v[,,1]), as.numeric(v[,,2]), as.numeric(v[,,3]), maxColorValue=1)
-    v.hsv = v    
+    v.hsv = v
     v.hsv[,,1] = a[1,]
     v.hsv[,,2] = a[2,]
     v.hsv[,,3] = a[3,]
@@ -79,6 +79,9 @@ displayb = function(mask, img, method="browser")
 
 displayf = function(mask2, ftrs, variable="variable", method="browser")
 {
+    if(is.null(ftrs$label)) 
+        ftrs$label = as.numeric(rownames(ftrs))
+    
     mask2.data = ftrs[match(mask2[mask2!=0], ftrs$label), variable]
     
     mask2[mask2!=0] = mask2.data
@@ -488,27 +491,36 @@ find.pins = function(img.bw, format, p=F)
 
 parse.file = function()
 {
-    #files = list.files("benchmark2", pattern=".*\\.JPG$", full.names=T)
-    #for(file in files)
-    #{
-    #    writeLines(paste0(which(file %in% files), " / ", length(files), ": ", file))
-    #}
-    
-    file = "benchmark/1536_4day.JPG"
-    format = as.numeric(gsub("(\\d+)_.*", "\\1", basename(file)))
-    # Read file
-    img.big = EBImage::readImage(file)
-    img = EBImage::resize(img.big, nrow(img.big)/3, ncol(img.big)/3)
-    img.bw = EBImage::channel(img, "grey")
-    img.hsv = rgb2hsv(img)
-    img.cmyk = rgb2cmyk(img)
-    
-    ret = find.pins(img.bw, format, p=T)
-    
-    img.ftrs = computeFeatures.shape(ret$mask.pins)
-    img.ftrs = cbind(img.ftrs, computeFeatures.moment(ret$mask.pins))
-    img.ftrs = cbind(img.ftrs, computeFeatures.basic2(ret$mask.pins, img, c("red", "green", "blue")))
-    img.ftrs = cbind(img.ftrs, computeFeatures.basic2(ret$mask.pins, img.cmyk, c("cyan", "magenta", "yellow", "black")))
-    img.ftrs = cbind(img.ftrs, computeFeatures.basic2(ret$mask.pins, img.hsv, c("hue", "saturation", "value")))
-    
+    files = list.files("benchmark", pattern=".*\\.JPG$", full.names=T)
+    for(file in files)
+    {
+        writeLines(paste0(which(file %in% files), " / ", length(files), ": ", file))
+        #file = "benchmark/1536_4day.JPG"
+        
+        format = as.numeric(gsub("(\\d+)_.*", "\\1", basename(file)))
+        # Read file
+        img.big = EBImage::readImage(file)
+        img = EBImage::resize(img.big, nrow(img.big)/3, ncol(img.big)/3)
+        img.bw = EBImage::channel(img, "grey")
+        img.hsv = rgb2hsv(img)
+        img.cmyk = rgb2cmyk(img)
+        
+        ret = find.pins(img.bw, format, p=T)
+        
+        img.ftrs = computeFeatures.shape(ret$mask.pins)
+        img.ftrs = cbind(img.ftrs, computeFeatures.moment(ret$mask.pins))
+        img.ftrs = cbind(img.ftrs, computeFeatures.basic2(ret$mask.pins, img, c("red", "green", "blue")))
+        img.ftrs = cbind(img.ftrs, computeFeatures.basic2(ret$mask.pins, img.cmyk, c("cyan", "magenta", "yellow", "black")))
+        img.ftrs = cbind(img.ftrs, computeFeatures.basic2(ret$mask.pins, img.hsv, c("hue", "saturation", "value")))
+        img.ftrs$label = as.numeric(rownames(img.ftrs))
+        
+        color.ftrs = colnames(img.ftrs)[grepl("red|green|blue|cyan|magenta|yellow|black", colnames(img.ftrs)) & grepl("mean", colnames(img.ftrs))]
+        head(img.ftrs[,color.ftrs])
+        img.pca = princomp(img.ftrs[,color.ftrs])
+        writeLines(paste0("First compoment explains ", round(100*(img.pca$sdev[1]^2 / sum(img.pca$sdev^2)), 1), "% variance"))
+        img.ftrs$variable = img.pca$scores[,1]
+        
+        displayf(ret$mask.pins, img.ftrs)
+        displayc(ret$mask.pins, img)
+    }
 }
