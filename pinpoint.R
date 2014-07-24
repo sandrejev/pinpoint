@@ -26,14 +26,14 @@ computeFeatures.basic2 = function(mask2, img2, layers="rgb")
     res = NULL
     if(length(dim(img)) == 2)
     {   
-        res = as.data.frame(computeFeatures.basic(mask2, img2))
+        res = as.data.frame(EBImage::computeFeatures.basic(mask2, img2))
     } else {
         if(length(layers) == 1) layers.v = unlist(strsplit(layers, ""))
         else layers.v = layers
         
         for(i in 1:dim(img)[3])    
         {
-            res.tmp = as.data.frame(computeFeatures.basic(mask2, img2[,,i]))
+            res.tmp = as.data.frame(EBImage::computeFeatures.basic(mask2, img2[,,i]))
             colnames(res.tmp) = paste0(layers.v[i], ".", colnames(res.tmp))
             
             if(is.null(res)) res = res.tmp
@@ -51,7 +51,7 @@ rgb2hsv = function(v)
     v.hsv[,,1] = a[1,]
     v.hsv[,,2] = a[2,]
     v.hsv[,,3] = a[3,]
-    colorMode(v.hsv) = Grayscale
+    EBImage::colorMode(v.hsv) = EBImage::Grayscale
     
     v.hsv
 }
@@ -85,11 +85,11 @@ displayf = function(mask2, ftrs, variable="variable", method="browser")
     mask2.data = ftrs[match(mask2[mask2!=0], ftrs$label), variable]
     
     mask2[mask2!=0] = mask2.data
-    mask3 = Image(abind(1/3+mask2/2, 1/4+mask2/2, 1/4+mask2/2, along=3), colormode=Color)
+    mask3 = EBImage::Image(abind(1/3+mask2/2, 1/4+mask2/2, 1/4+mask2/2, along=3), colormode=EBImage::Color)
     mask3[,,1] = NA
     mask3[mask2==0] = NA 
     
-    mask3 = normalize(mask3)
+    mask3 = EBImage::normalize(mask3)
     mask3[is.na(mask3)] = 0
     EBImage::display(mask3, method=method)
 }
@@ -115,32 +115,77 @@ format.dim = function(format, dim=c(1,2))
 }
 
 
-find.peaks = function(mask, format, r, margin=1, p=F)
+find.peaks = function(mask, format, r, margin=1, p=F, trace=1)
 {
     # The row/collumn format is inverse of x/y format used by EBImage
     margin.i = setdiff(1:2, margin)
     dim_exp = format.dim(format, margin.i)
-    
+        
     library(zoo)
     library(quantmod)
     pe = apply(mask>0, margin, mean, na.rm=T)
-    pe.mean = zoo::rollmean(pe, round.odd(r*1.5))
+    pe.rle = rle(pe)
+    pe.rle = pe.rle$length[pe.rle$values > .95]
+    pe.rle = pe.rle[pe.rle > r*1.5]
+    s = ifelse(length(pe.rle) > dim_exp/2, median(pe.rle), r*1.5)
+    s = pmax(s, r*1.5)
+    
+    pe.mean = zoo::rollmean(pe,  round.odd(s), na.pad=T, fill=c(pe[1], NA, last(pe)))
+    
     px = quantmod::findPeaks(pe.mean)
+    px = px[pe.mean[px] > 0.05]
     px.orig = px
     
     px.diff = diff(px)
-    px.diff = px.diff[px.diff >= (median(px.diff) - round(r/2)) & px.diff <= (median(px.diff) + round(r/2))]
-    px.diff_exp = mean(px.diff)
-    px_exp = round(seq(0, by=px.diff_exp, length.out=dim_exp))
     
-    px = px[c(1, which(diff(px) > px.diff_exp/4) + 1)]
+    #plot(pe, type="l")
+    #lines(pe.mean, col="red")
+    #abline(v=px)
+    #abline(v=px_exp + 100, col="green")
+    #abline(v=px, col="yellow")
 
+    px.diff_exp = NA
+    if(T | max(px.diff) - min(px.diff) < dim(mask)[margin] / (5*dim_exp))
+    {
+        .trace("Estimating peaks difference", trace, 1)
+        px.diff = px.diff[px.diff >= (median(px.diff) - round(r/2)) & px.diff <= (median(px.diff) + round(r/2))]
+        px.diff_exp = mean(px.diff)
+    } else {
+        .trace("Suspected multiple detected peaks per one actual. Using clustering to estimate difference between peaks", trace, 1)
+        k.pred = rep(NA, 4)
+        px.diff.cluster = list()
+        px.diff.dist = abs(outer(px.diff, px.diff, "-"))
+        for(k in 2:length(k.pred)) {
+            px.diff.cluster[[k]] = as.vector(cluster::pam(px.diff.dist, k, diss=TRUE)$clustering)
+            px.diff.cl_mean = aggregate(px.diff, list(cluster=px.diff.cluster[[k]]), mean)
+            px.diff.mindist = min(dist(px.diff.cl_mean$x))
+            k.pred[k] = px.diff.mindist
+        }
+        
+        cl = px.diff.cluster[[which.max(k.pred)]]
+        px.clust.fq = tabulate(cl) 
+        px.clust.fq = which(px.clust.fq > dim_exp/3)
+        
+        px.diff = px.diff[cl %in% px.clust.fq]
+        cl = cl[cl %in% px.clust.fq]
+        
+        px.diff.comb = expand.grid(aggregate(px.diff, list(cluster=cl), c)$x)
+        px.diff = apply(px.diff.comb, 1, sum)
+        
+        px.diff_exp = mean(quantile(px.diff, .40), quantile(px.diff, .60))
+    }
+    
+    stopifnot(!is.na(px.diff_exp))
+    
+    px_exp = round(seq(0, by=px.diff_exp, length.out=dim_exp))
+    px = px[c(1, which(diff(px) > px.diff_exp/4) + 1)]
+        
     if(length(px) < dim_exp) 
     {
         plot(pe.mean, type="l")
         abline(v=px.orig, col="grey")
         abline(v=px, col="red")
-        stop("Didn't find enough candidate peaks for grid detection")
+        stop(paste0("Didn't find enough candidate peaks for grid detection (", length(px), " < ", dim_exp, ")"))
     }
     
     peak.select = function(px_m, px_exp) {
@@ -165,7 +210,17 @@ find.peaks = function(mask, format, r, margin=1, p=F)
     
     offset = fit.offsets[which.min(px.fit_err)] 
     
+    plot(pe, type="l")
+    lines(pe.mean, type="l", col="grey")
+    abline(v=px_exp + offset)
     px.fit_cor = sapply(1:length(px_exp), function(i, ipem, ioffset, ipx.diff_exp, ipx_exp) {
+        #ll <<- list(i, ipem, ioffset, ipx.diff_exp, ipx_exp)
+        #i = ll[[1]]
+        #ipem = ll[[2]]
+        #ioffset = ll[[3]]
+        #ipx.diff_exp = ll[[4]]
+        #ipx_exp = ll[[5]]
+        
         x = ipx_exp[i] + ioffset
         x.local = (x-floor(ipx.diff_exp/2)+1):(x+floor(ipx.diff_exp/2)-1)
         x.middle = ceiling(length(x.local)/2)
@@ -174,21 +229,38 @@ find.peaks = function(mask, format, r, margin=1, p=F)
         x.opt = x.local[1] + optim(x.middle, f.opt, pem=ipem, method="Brent", control=opt.ctrl, lower=1, upper=length(x.local))$par
         x.opt = ifelse(ipem[x] > ipem[x.opt], x, x.opt)
         
+        ipem.rle = rle(ipem)
+        ipem.rle.x = c(0, cumsum(ipem.rle$lengths))
+        peak.start = ipem.rle.x[last(which(x.opt >= ipem.rle.x))]
+        peak.end = ipem.rle.x[first(which(x.opt <= ipem.rle.x))]
+
+        
+        x.opt = round((peak.start + peak.end)/2)
+        x.opt = ifelse(peak.end >= length(ipem)*0.99, ipem.rle.x[length(ipem.rle.x)-1], x.opt)
+        x.opt = ifelse(peak.start <= length(ipem)*0.01, ipem.rle.x[2], x.opt)
+        
+        #abline(v=x.local, col="#FF000033")
+        #abline(v=x, col="black")
+        #abline(v=x.opt, col="green")
+        #abline(v=c(), col="yellow")
+        
         return(x.opt)
     }, ipem=pe, ioffset=offset, ipx.diff_exp=px.diff_exp, ipx_exp=px_exp)
     
-    px.fit_cor2 = sapply(1:length(px.fit_cor), function(i) {
-        x = px.fit_cor[i]
-        x.local = (x-round(r/3)):(x+round(r/3))
-        x + which.max(pe[x.local]) - which(x.local==x)
-    })
+    px.fit_cor2 = round(px.fit_cor)
+    
+    #px.fit_cor2 = sapply(1:length(px.fit_cor), function(i) {
+    #    x = px.fit_cor[i]
+    #    x.local = (x-round(r/3)):(x+round(r/3))
+    #    x + which.max(pe[x.local]) - which(x.local==x)
+    #})
     
     # Move last and first peak tighter together. This happens sometimes in case
     # of tie result
-    pe.rle = with(rle(pe), lengths[c(1, length(lengths))])
-    lst = px.fit_cor2[length(px.fit_cor2)]
-    px.fit_cor2[length(px.fit_cor2)] = ifelse(lst > length(pe) - pe.rle[2] + 1, length(pe) - pe.rle[2] + 1, lst)
-    px.fit_cor2[1] = ifelse(px.fit_cor2[1] < pe.rle[1], pe.rle[1], px.fit_cor2[1])
+    #pe.rle = with(rle(pe), lengths[c(1, length(lengths))])
+    #lst = px.fit_cor2[length(px.fit_cor2)]
+    #px.fit_cor2[length(px.fit_cor2)] = ifelse(lst > length(pe) - pe.rle[2] + 1, length(pe) - pe.rle[2] + 1, lst)
+    #px.fit_cor2[1] = ifelse(px.fit_cor2[1] < pe.rle[1], pe.rle[1], px.fit_cor2[1])
     
     if(p)
     {
@@ -202,18 +274,18 @@ find.peaks = function(mask, format, r, margin=1, p=F)
 }
 
 
-find.plate = function(img.bw, r=find.radius(img.bw), ..., mask=NULL)
+find.plate = function(img.bw, r, p=F)
 {
-    if(is.null(mask)) {
-        img.thr = EBImage::thresh(img.bw, r*2, r*2, 0.005)
-        img.thr = EBImage::opening(img.thr, EBImage::makeBrush(round.odd(r), shape="disc"))
-        mask = EBImage::bwlabel(img.thr)
-    }
+    s = 0.01*min(dim(img.bw))
+    img.thr = EBImage::thresh(img.bw,  2*s, 2*s, 0.005)
+    img.thr = EBImage::opening(img.thr, EBImage::makeBrush(round.odd(s), shape="disc"))
+    mask = EBImage::bwlabel(img.thr)
+    mask.orig = mask
     
     mask.ftrs = as.data.frame(EBImage::computeFeatures.shape(mask))
     
     # remove frame
-    bulk.objects = which(mask.ftrs$s.area > 16*pi*(r^2))
+    bulk.objects = which(mask.ftrs$s.radius.max > r*4)
     mask.bulk = mask
     mask.bulk[!(mask %in% bulk.objects)] = 0
     
@@ -237,19 +309,31 @@ find.plate = function(img.bw, r=find.radius(img.bw), ..., mask=NULL)
         }
         res = res[complete.cases(res) & f,]
         res = median(res$V2, na.rm=T)
+        res = res + 0.0125 * ifelse(FUN.s == "max", -1, 1) * dim(mask.bulk)[d]
         
         res
     }
     
     f.bottom = which.frame(mask.bulk, 2, "max")
+    f.bottom = ifelse(is.na(f.bottom), ncol(mask.bulk), f.bottom)
     f.top = which.frame(mask.bulk, 2, "min")
+    f.top = ifelse(is.na(f.top), 0, f.top)
     f.right = which.frame(mask.bulk, 1, "max")
+    f.right = ifelse(is.na(f.right), nrow(mask.bulk), f.right)
     f.left = which.frame(mask.bulk, 1, "min")
+    f.left = ifelse(is.na(f.left), 0, f.left)
 
-    
     mask2 = mask
     mask2[T] = 0
     mask2[(f.top+r):(f.bottom-r),(f.left+r):(f.right-r)] = 1
+    
+    if(p)
+    {
+        mask.plot = channel(mask.orig, "rgb")
+        mask.plot[mask.plot %in% bulk.objects] = rep(c(1, 0.58, 0.4), each=sum(mask.plot %in% bulk.objects)/3)
+        mask.plot = mask.plot + 0.5*channel(mask2, "rgb")    
+        display(mask.plot)
+    }
     
     mask2
 }
@@ -270,17 +354,17 @@ round.odd = function (x)
 #    round(c(x.min, zoo::rollmean(x, 2), x.max))
 #}
 
-.find.spaces = function(pe0, r, x)
-{
-    r2 = round(max(diff(x)))
-    optmin = function(pe) { 
-        pe = pe > 0; 
-        round(optim(.75*r2, function(x) pe[round(x)], method="Brent", lower=1, upper=length(pe))$par) 
-    }    
-    
-    m1 = min(x); m2 = max(x);
-    c(m1-optmin(rev(pe0[(m1-r2):m1])), x, m2 - optmin(pe0[m2:(m2+r2)]))
-}
+#.find.spaces = function(pe0, r, x)
+#{
+#    r2 = round(max(diff(x)))
+#    optmin = function(pe) { 
+#        pe = pe > 0; 
+#        round(optim(.75*r2, function(x) pe[round(x)], method="Brent", lower=1, upper=length(pe))$par) 
+#    }    
+#    
+#    m1 = min(x); m2 = max(x);
+#    c(m1-optmin(rev(pe0[(m1-r2):m1])), x, m2 - optmin(pe0[m2:(m2+r2)]))
+#}
 
 .inverse = function(mask)
 {
@@ -296,8 +380,48 @@ round.odd = function (x)
         writeLines(text)
 }
 
-find.grid = function(img.bw, format, r=find.radius(img.bw), trace=1, p=F)
+.find.spaces = function(pe, px, p=F)
 {
+    sx.init = zoo::rollmean(px, 2)
+    sx.init = round(c(first(sx.init) - mean(diff(sx.init)), sx.init, last(sx.init) + mean(diff(sx.init))))
+    sx.init = data.frame(x=sx.init, left=c(0, px+round(r/4)), right=c(px-round(r/4), length(pe)))
+    
+    sx = apply(sx.init, 1, function(z, zpem) {
+        zz<<-z
+        zzpem <<- zpem
+        z.ctrl = list(maxit=20000, trace=1000)
+        f.opt = function(zz, zzpem) -zzpem[round(zz)]
+        z.opt = optim(z["x"], f.opt, zzpem=zpem, method="Brent", control=z.ctrl, lower=z["left"], upper=z["right"])$par
+        
+        zpem.lsize = 3
+        zpem.local = zpem[(z.opt-zpem.lsize):(z.opt+zpem.lsize)]
+        z.opt = z.opt + (which.max(zpem.local) - zpem.lsize - 1)
+        
+        zpem.rle = rle(zpem)
+        zpem.rle.x = c(0, cumsum(zpem.rle$lengths))
+        peak.start = zpem.rle.x[last(which(z.opt >= zpem.rle.x))]
+        peak.end = zpem.rle.x[first(which(z.opt <= zpem.rle.x))]
+        z.opt = round((peak.start + peak.end)/2)
+        z.opt = ifelse(peak.end >= length(zpem)*0.99, zpem.rle.x[length(zpem.rle.x)-1]+1, z.opt)
+        z.opt = ifelse(peak.start <= length(zpem)*0.01, zpem.rle.x[2], z.opt)
+        
+    }, zpem=pe)
+    
+    if(p)
+    {
+        plot(pe, type="l")
+        for(i in 1:nrow(sx.init)) polygon(x=c(sx.init[i, 2:3], sx.init[i, 3:2]), y=c(0, 0, 2, 2), border=NA, col="#FF000022")
+        abline(v=sx.init$x, col="red")    
+        abline(v=sx, col="green")
+    }
+    
+    sx
+}
+
+find.grid = function(img.bw, format, r=NULL, trace=1, p=F, ..., plate.mask=NULL)
+{
+    if(is.null(r)) r = find.radius(img.bw, format, p=p)
+    
     fdim = format.dim(format)
     
     .trace("Convert to black and white", trace, 1)
@@ -306,17 +430,18 @@ find.grid = function(img.bw, format, r=find.radius(img.bw), trace=1, p=F)
     mask = EBImage::bwlabel(img.thr)
     
     # Remove frame
-    .trace("Detect and remove frame around pins", trace, 1)
-    plate.mask = find.plate(mask=mask, r=r)
-    frame.objects = unique(as.vector(mask * (plate.mask == 0)))
-    mask[mask %in% frame.objects] = 0
+    if(!is.null(plate.mask))
+    {
+        .trace("Remove objects outside plate pins area", trace, 1)
+        frame.objects = unique(as.vector(mask * (plate.mask == 0)))
+        mask[mask %in% frame.objects] = 0
+    }
 
     # Find grid
     .trace("Find pins centers", trace, 1)
-    cy = find.peaks(mask, format, r, margin=2, p=p)
-    cx = find.peaks(mask, format, r, margin=1, p=p)
-    cy = round(cy)
-    cx = round(cx)
+    cy = find.peaks(mask, format, r, margin=2, p=p, trace=trace)
+    cx = find.peaks(mask, format, r, margin=1, p=p, trace=trace)
+
 
     if(p) {
         .trace("Display detected centers", trace, 1)
@@ -332,21 +457,19 @@ find.grid = function(img.bw, format, r=find.radius(img.bw), trace=1, p=F)
     mask.inv[1:(min(cx) - 2*r),] = 1
     mask.inv[,(max(cy) + 2*r):ncol(mask)] = 1
     mask.inv[,1:(min(cy) - 2*r)] = 1    
-    sy = find.peaks(mask.inv, fdim+1, r, margin=2, p=p)
-    sx = find.peaks(mask.inv, fdim+1, r, margin=1, p=p)
-    #sy[1] = 2*sy[2] - sy[3]; sx[1] = 2*sx[2] - sx[3]
-    #sy[length(sy)] = 2*sy[length(sy)-1] - sy[length(sy)-2]
-    #sx[length(sx)] = 2*sx[length(sx)-1] - sx[length(sx)-2]
-    sx = round(sx)
-    sy = round(sy)
-    
+    #sy = find.peaks(mask.inv, fdim+1, r, margin=2, p=p, trace=trace)
+    #sx = find.peaks(mask.inv, fdim+1, r, margin=1, p=p, trace=trace)
+
+    sx = .find.spaces(rowMeans(mask.inv), cx, p=T)
+    sy = .find.spaces(colMeans(mask.inv), cy, p=T)
+         
     if(p)
     {
         .trace("Display detected spaces", trace, 1)
         mask.plot = mask.inv
         mask.plot[sx, ] = 0
         mask.plot[, sy] = 0
-        EBImage::display(mask.inv)
+        EBImage::display(mask.plot)
     }
     
     .trace("Find squares for around pins", trace, 1)    
@@ -404,15 +527,36 @@ find.grid = function(img.bw, format, r=find.radius(img.bw), trace=1, p=F)
 }
 
 
-find.radius = function(img)
+find.radius = function(img, format, p=F)
 {
+    fdim = format.dim(format)
+    
     img.thr = EBImage::thresh(img, 20, 20, 0.005)
     mask = EBImage::opening(img.thr, EBImage::makeBrush(5, shape="disc"))
     mask = EBImage::bwlabel(mask)
     mask.ftrs = EBImage::computeFeatures.shape(mask)
-    bad.objects = which(mask.ftrs[,"s.area"] < 10 | mask.ftrs[,"s.radius.min"]*1.5 < mask.ftrs[,"s.radius.max"])
+    bad.objects = which(mask.ftrs[,"s.area"] < prod(dim(img)[1:2])/400^2 | mask.ftrs[,"s.radius.min"]*1.5 < mask.ftrs[,"s.radius.max"])
     mask[mask %in% bad.objects] = 0
-    median(mask.ftrs[,"s.radius.mean"], na.rm=T)
+    
+    mask = EBImage::fillHull(mask)
+    mask.ftrs = EBImage::computeFeatures.shape(mask)
+    
+    objects.order = order(mask.ftrs[,"s.area"], decreasing=T)
+    objects = rownames(mask.ftrs)[objects.order]
+    objects = objects[5:pmin(prod(fdim)/2, nrow(mask.ftrs)/3)]
+    
+    r.median = median(mask.ftrs[objects, "s.radius.mean"])
+    
+    if(p)
+    {
+        mask2 = mask
+        mask2[!(mask2 %in% objects)] = 0
+        mask2 = channel(mask2, "rgb")
+        mask2 = drawCircle(mask2, nrow(mask2)%/%2, ncol(mask2)%/%2, radius=round(r.median), col="#FF9466", fill=T)
+        display(mask2)
+    }
+    
+    r.median
 }
 
 find.intensity = function(grid.data, img.bw, mode="center", format=max(grid.data$col) * max(grid.data$row))
@@ -438,12 +582,13 @@ find.intensity = function(grid.data, img.bw, mode="center", format=max(grid.data
     }
 }
 
-find.pins = function(img.bw, format, p=F)
+find.pins = function(img.bw, format, r=NULL, p=F, ..., plate.mask=NULL)
 {
-    r=find.radius(img.bw)
-    
     fdim = format.dim(format)
-    ret = find.grid(img.bw, format=format, p=p)
+    
+    if(is.null(r)) r = find.radius(img.bw, format, p=p)
+    
+    ret = find.grid(img.bw, r=r, format=format, p=p, plate.mask=plate.mask)
     
     lmax = find.intensity(ret, img.bw, "center", format=format)
     bg = find.intensity(ret, img.bw, "background", format=format)
@@ -475,13 +620,13 @@ find.pins = function(img.bw, format, p=F)
     seeds = mask
     seeds[T] = 0
     seeds[ret$data$x, ret$data$y] = mask[ret$data$x, ret$data$y]
-    mask.prop = propagate(img.bw, seeds, mask)
+    mask.prop = EBImage::propagate(img.bw, seeds, mask)
         
     if(p)
     {
         displayc(EBImage::tile(mask.stack, fg.col="#000000", nx=fdim[2]), EBImage::tile(img.bw.stack, fg.col=gray(mean(bg)), nx=fdim[2]))
         displayc(mask.prop, img.bw)
-        EBImage::display(EBImage::tile(mask.stack.b, 48))
+        EBImage::display(EBImage::tile(mask.stack.b, fdim[2]))
     }
     
     list(mask.pins=mask.prop, mask.sqr=ret$mask, data=ret$data)
@@ -495,7 +640,7 @@ parse.file = function()
     for(file in files)
     {
         writeLines(paste0(which(file %in% files), " / ", length(files), ": ", file))
-        #file = "benchmark/1536_4day.JPG"
+        #file = "benchmark/1536_4day_2X.JPG"
         
         format = as.numeric(gsub("(\\d+)_.*", "\\1", basename(file)))
         # Read file
@@ -505,10 +650,13 @@ parse.file = function()
         img.hsv = rgb2hsv(img)
         img.cmyk = rgb2cmyk(img)
         
-        ret = find.pins(img.bw, format, p=T)
+        r = find.radius(img.bw, format)
+        plate.mask = find.plate(img.bw, r, T)
+        ret = find.pins(img.bw, format, r=r, p=T, plate.mask=plate.mask)
+        displayc(ret$mask.pins, img)
         
-        img.ftrs = computeFeatures.shape(ret$mask.pins)
-        img.ftrs = cbind(img.ftrs, computeFeatures.moment(ret$mask.pins))
+        img.ftrs = EBImage::computeFeatures.shape(ret$mask.pins)
+        img.ftrs = cbind(img.ftrs, EBImage::computeFeatures.moment(ret$mask.pins))
         img.ftrs = cbind(img.ftrs, computeFeatures.basic2(ret$mask.pins, img, c("red", "green", "blue")))
         img.ftrs = cbind(img.ftrs, computeFeatures.basic2(ret$mask.pins, img.cmyk, c("cyan", "magenta", "yellow", "black")))
         img.ftrs = cbind(img.ftrs, computeFeatures.basic2(ret$mask.pins, img.hsv, c("hue", "saturation", "value")))
