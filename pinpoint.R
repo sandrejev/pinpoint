@@ -149,7 +149,8 @@ find.peaks = function(mask, format, r, margin=1, p=F, trace=1)
         
     if(length(px) < dim_exp) 
     {
-        plot(pe.mean, type="l")
+        plot(pe, type="l", col="#000000")
+        lines(pe.mean, type="l", col="#FF000066")
         abline(v=px.orig, col="grey")
         abline(v=px, col="red")
         stop(paste0("Didn't find enough candidate peaks for grid detection (", length(px), " < ", dim_exp, ")"))
@@ -304,13 +305,18 @@ round.odd = function (x)
 
 .find.spaces = function(pe, px, p=F)
 {
+    pe.rle = rle(pe)
+    pe.rle = pe.rle$length[pe.rle$values > .95]
+    pe.rle = pe.rle[pe.rle > r*1.5]
+    s = ifelse(length(pe.rle) > (length(px)+1)/2, median(pe.rle), r*1.5)
+    s = pmax(s, r*1.5)
+    pe.mean = zoo::rollmean(pe,  round.odd(s), na.pad=T, fill=c(pe[1], NA, last(pe)))
+    
     sx.init = zoo::rollmean(px, 2)
     sx.init = round(c(first(sx.init) - mean(diff(sx.init)), sx.init, last(sx.init) + mean(diff(sx.init))))
     sx.init = data.frame(x=sx.init, left=c(0, px+round(r/4)), right=c(px-round(r/4), length(pe)))
     
     sx = apply(sx.init, 1, function(z, zpem) {
-        zz<<-z
-        zzpem <<- zpem
         z.ctrl = list(maxit=20000, trace=1000)
         f.opt = function(zz, zzpem) -zzpem[round(zz)]
         z.opt = optim(z["x"], f.opt, zzpem=zpem, method="Brent", control=z.ctrl, lower=z["left"], upper=z["right"])$par
@@ -327,11 +333,12 @@ round.odd = function (x)
         z.opt = ifelse(peak.end >= length(zpem)*0.99, zpem.rle.x[length(zpem.rle.x)-1]+1, z.opt)
         z.opt = ifelse(peak.start <= length(zpem)*0.01, zpem.rle.x[2], z.opt)
         
-    }, zpem=pe)
+    }, zpem=pe.mean)
     
     if(p)
     {
         plot(pe, type="l")
+        lines(pe.mean, col="#FF000066")
         for(i in 1:nrow(sx.init)) polygon(x=c(sx.init[i, 2:3], sx.init[i, 3:2]), y=c(0, 0, 2, 2), border=NA, col="#FF000022")
         abline(v=sx.init$x, col="red")    
         abline(v=sx, col="green")
@@ -347,18 +354,23 @@ find.grid = function(img.bw, format, r=NULL, trace=1, p=F, ..., plate.mask=NULL)
     fdim = format.dim(format)
     
     .trace("Convert to black and white", trace, 1)
-    img.thr = EBImage::thresh(img.bw, r*2, r*2, 0.005)
-    img.thr = EBImage::opening(img.thr, EBImage::makeBrush(round.odd(r), shape="disc"))
-    mask = EBImage::bwlabel(img.thr)
-    
-    # Remove frame
+    img.thr = EBImage::thresh(img.bw, r*1.5, r*1.5, 0.005)
+    s.radius = round.odd(.005*min(dim(img.bw)))
+    img.thr = EBImage::opening(img.thr, EBImage::makeBrush(s.radius, shape="disc"))
+    img.thr = EBImage::bwlabel(img.thr)
     if(!is.null(plate.mask))
     {
         .trace("Remove objects outside plate pins area", trace, 1)
-        frame.objects = unique(as.vector(mask * (plate.mask == 0)))
-        mask[mask %in% frame.objects] = 0
+        frame.objects = unique(as.vector(img.thr * (plate.mask == 0)))
+        img.thr[img.thr %in% frame.objects] = 0
+        img.thr = reenumerate(img.thr)
     }
-
+    
+    img.thr = fillHull(img.thr)
+    mask = EBImage::opening(img.thr > 0, EBImage::makeBrush(round.odd(r), shape="disc"))
+    mask = EBImage::bwlabel(mask)
+    
+    
     # Find grid
     .trace("Find pins centers", trace, 1)
     cy = find.peaks(mask, format, r, margin=2, p=p, trace=trace)
@@ -373,15 +385,18 @@ find.grid = function(img.bw, format, r=NULL, trace=1, p=F, ..., plate.mask=NULL)
         EBImage::display(mask.plot)
     }
     
+    
+    
     .trace("Find spaces between pins", trace, 1)
     mask.inv = .inverse(mask)
-    mask.inv[(max(cx) + 2*r):nrow(mask),] = 1
-    mask.inv[1:(min(cx) - 2*r),] = 1
-    mask.inv[,(max(cy) + 2*r):ncol(mask)] = 1
-    mask.inv[,1:(min(cy) - 2*r)] = 1    
-    #sy = find.peaks(mask.inv, fdim+1, r, margin=2, p=p, trace=trace)
-    #sx = find.peaks(mask.inv, fdim+1, r, margin=1, p=p, trace=trace)
-
+    mask.inv[(max(cx) + round(mean(diff(cx))/2)):nrow(mask),] = 1
+    mask.inv[1:(min(cx) - round(mean(diff(cx))/2)),] = 1
+    mask.inv[,(max(cy) + round(mean(diff(cy))/2)):ncol(mask)] = 1
+    mask.inv[,1:(min(cy) - round(mean(diff(cy))/2))] = 1 
+    mask.inv[(max(cx) + round(mean(diff(cx)))):nrow(mask),] = 0
+    mask.inv[1:(min(cx) - round(mean(diff(cx)))),] = 0
+    mask.inv[,(max(cy) + round(mean(diff(cy)))):ncol(mask)] = 0   
+    mask.inv[,1:(min(cy) - round(mean(diff(cy))))] = 0   
     sx = .find.spaces(rowMeans(mask.inv), cx, p=T)
     sy = .find.spaces(colMeans(mask.inv), cy, p=T)
          
@@ -436,14 +451,6 @@ find.grid = function(img.bw, format, r=NULL, trace=1, p=F, ..., plate.mask=NULL)
     mask.sqr[sx[2:length(sx)],] = mask.sqr[sx[2:length(sx)]-1,]
     mask.sqr[,sy[2:length(sy)]] = mask.sqr[,sy[2:length(sy)]-1]
 
-    #mask.test = mask.sqr
-    #d = sample(0:1536, 1537)
-    #for(j in 1:1536) {
-    #    f = mask.test==j
-    #    mask.test[f] = d[j]
-    #}
-    #display(mask.test)
-    #display(mask.test/1536)
     
     list(data=ret, mask=mask.sqr)
 }
@@ -481,25 +488,86 @@ find.radius = function(img, format, p=F)
     r.median
 }
 
-find.intensity = function(grid.data, img.bw, mode="center", format=max(grid.data$col) * max(grid.data$row))
+find.intensity = function(grid.data, img.bw, mode="center", format=max(grid.data$col) * max(grid.data$row), p=F)
 {
     fdim = format.dim(format)
     if(mode == "center")
     {
-        lmax.grid = expand.grid(x=seq(1/3, 2/3, length.out=11), y=seq(1/3, 2/3, length.out=11))
-        lmax = apply(lmax.grid, 1, function(z, d) {
-            ceiling(z[2]*d$yt + (1-z[2])*d$yb)*nrow(img.bw) + ceiling(z[1]*d$xl + (1-z[1])*d$xr)
-        }, d=grid.data$data)
-        lmax = matrix(img.bw[lmax], nrow=prod(fdim))
-        lmax = apply(lmax, 1, quantile, 0.95)
-        return(lmax)
+        mr = 0.1
+        minmax = seq(-mr, mr, length.out=15)
+        lmax.grid = expand.grid(x=minmax, y=minmax)
+        lmax.grid = lmax.grid[sqrt(lmax.grid$x^2 + lmax.grid$y^2) <= mr,]
+        lmax.grid = rbind(
+            plyr::ddply(lmax.grid, "x", function(z) data.frame(y=min(z["y"]))),
+            plyr::ddply(lmax.grid, "x", function(z) data.frame(y=max(z["y"])))
+        )
+        
+        nr = nrow(img.bw)
+        lmax = apply(lmax.grid, 1, function(z, d, znr) {
+            s = pmin(d$yb-d$yt, d$xr-d$xl)
+            ceiling(d$y + z[2]*s)*znr + 
+            ceiling(d$x + z[1]*s)
+        }, d=grid.data$data, znr=nr)
+        lmax.vals = matrix(as.vector(img.bw[as.numeric(lmax)]), nrow=prod(fdim))
+        lmax.mean = apply(lmax.vals, 1, function(z) {
+            z.dens = density(z)
+            z.dens$x[which.max(z.dens$y)]
+            #mean(quantile(z, c(.25, .75)))
+        })
+            
+        if(p)
+        {
+            img.plot = channel(img.bw, "rgb")
+            img.plot[rep(as.numeric(lmax), each = 3)] = 1
+            img.plot[as.numeric(lmax)] = 0
+            img.plot[as.numeric(lmax)] = 0
+            display(img.plot)
+            
+            plot(density(as.numeric(lmax.vals[1,])), col="#00000033")
+            for(i in 1:nrow(lmax)) {
+                lines(density(as.numeric(lmax.vals[i,])), col="#00000033")
+            }
+        }
+        
+        
+        return(lmax.mean)
     }
     
     if(mode == "background")
     {
-        bg = with(grid.data$data, cbind(img.bw[yt*nrow(img.bw) + xl], img.bw[yt*nrow(img.bw) + xr],
-            img.bw[yb*nrow(img.bw) + xl], img.bw[yb*nrow(img.bw) + xr]))
-        bg = apply(bg, 1, min)
+        img.bw
+        
+        q = .5
+        bg = with(grid.data$data, cbind(
+            tl = apply(cbind(
+                img.bw[yt*nrow(img.bw) + xl], 
+                img.bw[(yt+1)*nrow(img.bw) + xl], 
+                img.bw[yt*nrow(img.bw) + (xl + 1)], 
+                img.bw[(yt+1)*nrow(img.bw) + (xl + 1)]
+            ), 1, quantile, probs=q), 
+            
+            tr = apply(cbind(
+                img.bw[yt*nrow(img.bw) + xr],
+                img.bw[(yt+1)*nrow(img.bw) + xr],
+                img.bw[yt*nrow(img.bw) + (xr - 1)],
+                img.bw[(yt+1)*nrow(img.bw) + (xr - 1)]
+            ), 1, quantile, probs=q),  
+            
+            bl = apply(cbind(
+                img.bw[yb*nrow(img.bw) + xl], 
+                img.bw[(yb-1)*nrow(img.bw) + xl], 
+                img.bw[yb*nrow(img.bw) + (xl + 1)],
+                img.bw[(yb-1)*nrow(img.bw) + (xl + 1)]
+            ), 1, quantile, probs=q), 
+            
+            br = apply(cbind(
+                img.bw[yb*nrow(img.bw) + xr],
+                img.bw[(yb-1)*nrow(img.bw) + xr],
+                img.bw[yb*nrow(img.bw) + (xr - 1)],
+                img.bw[(yb-1)*nrow(img.bw) + (xl - 1)]
+            ), 1, quantile, probs=q)
+        ))
+        
         return(bg)
     }
 }
@@ -510,34 +578,68 @@ find.pins = function(img.bw, format, r=NULL, p=F, ..., plate.mask=NULL)
     
     if(is.null(r)) r = find.radius(img.bw, format, p=p)
     
-    ret = find.grid(img.bw, r=r, format=format, p=p, plate.mask=plate.mask)
+    ret.grid = find.grid(img.bw, r=r, format=format, p=p, plate.mask=plate.mask)
     
-    lmax = find.intensity(ret, img.bw, "center", format=format)
-    bg = find.intensity(ret, img.bw, "background", format=format)
+    f = makeBrush(round.odd(r/2), shape='disc', step=FALSE)
+    f = f/sum(f)
+    img.bw.low = filter2(img.bw, f)
+    lmax = find.intensity(ret, img.bw.low, "center", format=format)
+    bg = find.intensity(ret, img.bw.low, "background", format=format)
+    bg.avg = rowMeans(bg)
 
-    img.bw.stack = EBImage::stackObjects(ret$mask, img.bw, bg.col=-1)
+    img.bw.stack = EBImage::stackObjects(ret.grid$mask, img.bw, bg.col=-1)
+    img.bw.stack[img.bw.stack < 0] = NA
     img.bw.stack.orig = img.bw.stack
     frame.dim = prod(dim(img.bw.stack)[1:2])
     
-    img.bw.stack_bg = EBImage::Image(rep(bg[1:prod(fdim)], each=frame.dim), dim=dim(img.bw.stack))
-    img.bw.stack[img.bw.stack < 0] = img.bw.stack_bg[img.bw.stack < 0]
+    grad.x = row(img.bw.stack[,,1])/nrow(img.bw.stack)
+    grad.y = col(img.bw.stack[,,1])/ncol(img.bw.stack)
+    grad.br = grad.x*grad.y
+    grad.bl = (1-grad.x)*grad.y
+    grad.tl = (1-grad.x)*(1-grad.y)
+    grad.tr = grad.x*(1-grad.y)
+    img.bw.stack_bgtl = EBImage::Image(rep(as.numeric(grad.tl), prod(fdim)) * rep(bg[1:prod(fdim),"tl"], each=frame.dim), dim=dim(img.bw.stack))
+    img.bw.stack_bgtr = EBImage::Image(rep(as.numeric(grad.tr), prod(fdim)) * rep(bg[1:prod(fdim),"tr"], each=frame.dim), dim=dim(img.bw.stack))
+    img.bw.stack_bgbl = EBImage::Image(rep(as.numeric(grad.bl), prod(fdim)) * rep(bg[1:prod(fdim),"bl"], each=frame.dim), dim=dim(img.bw.stack))
+    img.bw.stack_bgbr = EBImage::Image(rep(as.numeric(grad.br), prod(fdim)) * rep(bg[1:prod(fdim),"br"], each=frame.dim), dim=dim(img.bw.stack))
+    img.bw.stack_bg = img.bw.stack_bgtl + img.bw.stack_bgtr + img.bw.stack_bgbl + img.bw.stack_bgbr
+    img.bw.stack[is.na(img.bw.stack)] = img.bw.stack_bg[is.na(img.bw.stack)]
     
     img.bw.stack_max = EBImage::Image(rep(lmax[1:prod(fdim)], each=frame.dim), dim=dim(img.bw.stack))
     img.bw.stack_class = EBImage::Image(rep(1:prod(fdim), each=frame.dim), dim=dim(img.bw.stack))
     img.bw.stack_hat = EBImage::selfcomplementaryTopHatGreyScale(img.bw.stack, EBImage::makeBrush(round.odd(r/2)))
+    img.bg.stack = EBImage::Image(rep(bg.avg > lmax, each=frame.dim), dim=dim(img.bw.stack))
     
-    mask.stack.a = img.bw.stack > img.bw.stack_bg + 0.1*(img.bw.stack_max - img.bw.stack_bg)
-    mask.stack.b = (img.bw.stack_max - img.bw.stack_bg) / img.bw.stack_bg > 1/4
-    mask.stack = mask.stack.a & mask.stack.b
+    
+    f = makeBrush(round.odd(r/1.5), shape='disc', step=FALSE)
+    img.bw.stack_low1.5 = filter2(img.bw.stack, f/sum(f))
+    f = makeBrush(round.odd(r/2), shape='disc', step=FALSE)
+    img.bw.stack_low2 = filter2(img.bw.stack, f/sum(f))
+    f = makeBrush(round.odd(r/3), shape='disc', step=FALSE)
+    img.bw.stack_low3 = filter2(img.bw.stack, f/sum(f))
+    img.bw.stack_loc = abs(img.bw.stack - img.bw.stack_low3) > 0.05
+    img.bw.stack_loc = closing(img.bw.stack_loc, makeBrush(round.odd(r/1.5)))
+    img.bw.stack_loc = fillHull(img.bw.stack_loc)
+    
+    display(tile(img.bw.stack_max, 12))
+    display(tile(img.bw.stack_bg, 12))
+    display(tile(img.bw.stack, 12))
+    display(tile(img.bw.stack_loc, 12))
+    
+    mask.stack.a = !is.na(img.bw.stack.orig)
+    mask.stack.b = img.bw.stack > img.bw.stack_bg + 0.1*(img.bw.stack_max - img.bw.stack_bg)
+    mask.stack.c = abs(img.bw.stack_max - img.bw.stack_bg) / img.bw.stack_bg > 1/4
+
+    mask.stack = mask.stack.a & img.bw.stack_loc
     mask.stack = EBImage::bwlabel(mask.stack)
     mask.stack = EBImage::fillHull(mask.stack)
     mask.stack = EBImage::opening(mask.stack > 0, EBImage::makeBrush(round.odd(r/2)))
     mask.stack = (mask.stack > 0) * img.bw.stack_class
     
-    mask = ret$mask
+    mask = ret.grid$mask
     mask[T] = 0    
-    mask.sqr.vector = which(ret$mask>0)[order(as.numeric(ret$mask[ret$mask>0]))]
-    mask[mask.sqr.vector] = mask.stack[img.bw.stack.orig>=0]
+    mask.sqr.vector = which(ret.grid$mask>0)[order(as.numeric(ret.grid$mask[ret.grid$mask>0]))]
+    mask[mask.sqr.vector] = mask.stack[!is.na(img.bw.stack.orig)]
     
     seeds = mask
     seeds[T] = 0
@@ -548,31 +650,88 @@ find.pins = function(img.bw, format, r=NULL, p=F, ..., plate.mask=NULL)
     {
         displayc(EBImage::tile(mask.stack, fg.col="#000000", nx=fdim[2]), EBImage::tile(img.bw.stack, fg.col=gray(mean(bg)), nx=fdim[2]))
         displayc(mask.prop, img.bw)
-        EBImage::display(EBImage::tile(mask.stack.b, fdim[2]))
     }
     
-    list(mask.pins=mask.prop, mask.sqr=ret$mask, data=ret$data)
+    list(mask.pins=mask.prop, mask.sqr=ret.grid$mask, data=ret$data)
 }
 
+autoconfig.color = function()
+{
+    files = list.files("benchmark2/p28_X200_96/", pattern=".*\\.JPG$", full.names=T)
+    images.val = data.frame()
+    for(file in files)
+    {
+        writeLines(paste0(which(file==files), " / ", length(files), ": ", file))
+        img.big = EBImage::readImage(file)
+        img.sample = img.big[round(0.4*nrow(img.big)):round(0.6*nrow(img.big)), round(0.4*ncol(img.big)):round(0.6*ncol(img.big)),]
+        img.val = cbind(as.numeric(img.hsv[,,1]), as.numeric(img.hsv[,,2]), as.numeric(img.hsv[,,3]), as.numeric(img[,,1]), as.numeric(img[,,2]), as.numeric(img[,,3]), as.numeric(img.cmyk[,,1]), as.numeric(img.cmyk[,,2]), as.numeric(img.cmyk[,,3]), as.numeric(img.cmyk[,,3]))
+        images.val = rbind(images.val, img.val)
+    }
+    
+    images.val.s = images.val[sample.int(nrow(images.val), 10000),]
+    colnames(images.val.s) = c("h", "s", "v", "r", "g", "b", "c", "m", "y", "k")
+    img.val.pca = princomp(images.val.s)
+    writeLines(paste0("First compoment explains ", round(100*(img.val.pca$sdev[1]^2 / sum(img.val.pca$sdev^2)), 1), "% variance"))
+    pc = 9
+    img.pca = 
+        img.val.pca$loadings[1,pc] * img.hsv[,,1] + img.val.pca$loadings[2,pc] * img.hsv[,,2] + img.val.pca$loadings[3,pc] * img.hsv[,,3] +
+        img.val.pca$loadings[4,pc] * img[,,1] + img.val.pca$loadings[5,pc] * img[,,2] + img.val.pca$loadings[6,pc] * img[,,3] +
+        img.val.pca$loadings[7,pc] * img.cmyk[,,1] + img.val.pca$loadings[8,pc] * img.cmyk[,,2] + img.val.pca$loadings[9,pc] * img.cmyk[,,3] + img.val.pca$loadings[10,pc] * img.cmyk[,,4]
+
+    img.pca = 2*img.hsv[,,2]
+    display(normalize(img.pca))
+    a = 180:(nrow(img)-160)
+    b = 110:(ncol(img)-110)
+    
+   # img.bw = 
+    img.cmyk[a,b,3]
+
+    par(mfrow=c(3,4))
+    plot(density(img.cmyk[a,b,1]), main="c", col="cyan")
+    lines(density(as.numeric(img[a,b,1])), main="r", col="red")
+    
+    lines(density(img.cmyk[a,b,2]), main="m", col="magenta")
+    lines(density(img.cmyk[a,b,4]), main="k", col="black")
+    lines(density(as.numeric(img[a,b,1])), main="r", col="red")
+    lines(density(as.numeric(img[a,b,2])), main="g", col="green")
+    lines(density(as.numeric(img[a,b,3])), main="b", col="blue")
+    
+    
+    
+    #lines(density(img.cmyk[a,b,3]), main="y", col="yellow")
+    #lines(density(img.hsv[a,b,1]), main="h", col="#AA33FF")
+    #lines(density(img.hsv[a,b,2]), main="s", col="#CC66FF")
+    #lines(density(img.hsv[a,b,3]), main="v", col="#EE99FF")
+    par(mfrow=c(1,1))
+    
+    display(normalize(img[a,b,1]))
+    
+    
+    display(normalize(img.cmyk[a,b,4] * img.hsv[a,b,3]))
+    
+    - 0.5*img.cmyk[,,1] - 0.3*img.cmyk[,,3] - 0.9*img.cmyk[,,4]
+    
+}
 
 
 parse.file = function()
 {
-    files = list.files("benchmark2/p28_X200", pattern=".*\\.JPG$", full.names=T)
+    files = list.files("benchmark2/p28_X200_96/", pattern=".*\\.JPG$", full.names=T)
     for(file in files)
     {
-        writeLines(paste0(which(file %in% files), " / ", length(files), ": ", file))
+        writeLines(paste0(which(file==files), " / ", length(files), ": ", file))
         #file = "benchmark/1536_4day_2X.JPG"
         
         format = as.numeric(gsub("(\\d+)_.*", "\\1", basename(file)))
         # Read file
         img.big = EBImage::readImage(file)
         img = EBImage::resize(img.big, nrow(img.big)/3, ncol(img.big)/3)
-        img.bw = EBImage::channel(img, "grey")
         img.hsv = rgb2hsv(img)
         img.cmyk = rgb2cmyk(img)
+        #img.bw = EBImage::channel(img, "grey")
+        img.bw = img.hsv[,,3]
         
-        r = find.radius(img.bw, format)
+        r = find.radius(img.bw, format, p = T)
         plate.mask = find.plate(img.bw, r, T)
         ret = find.pins(img.bw, format, r=r, p=T, plate.mask=plate.mask)
         displayc(ret$mask.pins, img)
@@ -597,7 +756,6 @@ parse.file = function()
         png(paste0(file, "_contour.png"), width=nrow(ret$mask.pins), height=ncol(ret$mask.pins))
         displayc(ret$mask.pins, img, method="raster")
         dev.off()
-        
         
         data.export = merge(ret$data, img.ftrs, by="label", all.x=T)
         write.table(data.export, file=paste0(file, "_data.tab"), quote=F, row.names=F, sep="\t", na="")
