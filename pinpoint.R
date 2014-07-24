@@ -8,10 +8,8 @@ rgb2cmyk = function(img2)
     K = img2.1
     K[img2.2 > K] = img2.2[img2.2 > K]
     K[img2.3 > K] = img2.3[img2.3 > K]
-    K = 1 - K
 
-    #K = 1 - apply(img2, 1:2, max)
-    
+    K = 1 - K
     C = (1-img2.1-K) / (1-K)
     M = (1-img2.2-K) / (1-K)
     Y = (1-img2.3-K) / (1-K)
@@ -138,42 +136,11 @@ find.peaks = function(mask, format, r, margin=1, p=F, trace=1)
     
     px.diff = diff(px)
     
-    #plot(pe, type="l")
-    #lines(pe.mean, col="red")
-    #abline(v=px)
-    #abline(v=px_exp + 100, col="green")
-    #abline(v=px, col="yellow")
 
-    px.diff_exp = NA
-    if(T | max(px.diff) - min(px.diff) < dim(mask)[margin] / (5*dim_exp))
-    {
-        .trace("Estimating peaks difference", trace, 1)
-        px.diff = px.diff[px.diff >= (median(px.diff) - round(r/2)) & px.diff <= (median(px.diff) + round(r/2))]
-        px.diff_exp = mean(px.diff)
-    } else {
-        .trace("Suspected multiple detected peaks per one actual. Using clustering to estimate difference between peaks", trace, 1)
-        k.pred = rep(NA, 4)
-        px.diff.cluster = list()
-        px.diff.dist = abs(outer(px.diff, px.diff, "-"))
-        for(k in 2:length(k.pred)) {
-            px.diff.cluster[[k]] = as.vector(cluster::pam(px.diff.dist, k, diss=TRUE)$clustering)
-            px.diff.cl_mean = aggregate(px.diff, list(cluster=px.diff.cluster[[k]]), mean)
-            px.diff.mindist = min(dist(px.diff.cl_mean$x))
-            k.pred[k] = px.diff.mindist
-        }
-        
-        cl = px.diff.cluster[[which.max(k.pred)]]
-        px.clust.fq = tabulate(cl) 
-        px.clust.fq = which(px.clust.fq > dim_exp/3)
-        
-        px.diff = px.diff[cl %in% px.clust.fq]
-        cl = cl[cl %in% px.clust.fq]
-        
-        px.diff.comb = expand.grid(aggregate(px.diff, list(cluster=cl), c)$x)
-        px.diff = apply(px.diff.comb, 1, sum)
-        
-        px.diff_exp = mean(quantile(px.diff, .40), quantile(px.diff, .60))
-    }
+    .trace("Estimating peaks difference", trace, 1)
+    px.diff = px.diff[px.diff >= (median(px.diff) - round(r/2)) & px.diff <= (median(px.diff) + round(r/2))]
+    px.diff_exp = mean(px.diff)
+
     
     stopifnot(!is.na(px.diff_exp))
     
@@ -214,13 +181,6 @@ find.peaks = function(mask, format, r, margin=1, p=F, trace=1)
     lines(pe.mean, type="l", col="grey")
     abline(v=px_exp + offset)
     px.fit_cor = sapply(1:length(px_exp), function(i, ipem, ioffset, ipx.diff_exp, ipx_exp) {
-        #ll <<- list(i, ipem, ioffset, ipx.diff_exp, ipx_exp)
-        #i = ll[[1]]
-        #ipem = ll[[2]]
-        #ioffset = ll[[3]]
-        #ipx.diff_exp = ll[[4]]
-        #ipx_exp = ll[[5]]
-        
         x = ipx_exp[i] + ioffset
         x.local = (x-floor(ipx.diff_exp/2)+1):(x+floor(ipx.diff_exp/2)-1)
         x.middle = ceiling(length(x.local)/2)
@@ -239,28 +199,10 @@ find.peaks = function(mask, format, r, margin=1, p=F, trace=1)
         x.opt = ifelse(peak.end >= length(ipem)*0.99, ipem.rle.x[length(ipem.rle.x)-1], x.opt)
         x.opt = ifelse(peak.start <= length(ipem)*0.01, ipem.rle.x[2], x.opt)
         
-        #abline(v=x.local, col="#FF000033")
-        #abline(v=x, col="black")
-        #abline(v=x.opt, col="green")
-        #abline(v=c(), col="yellow")
-        
         return(x.opt)
     }, ipem=pe, ioffset=offset, ipx.diff_exp=px.diff_exp, ipx_exp=px_exp)
     
     px.fit_cor2 = round(px.fit_cor)
-    
-    #px.fit_cor2 = sapply(1:length(px.fit_cor), function(i) {
-    #    x = px.fit_cor[i]
-    #    x.local = (x-round(r/3)):(x+round(r/3))
-    #    x + which.max(pe[x.local]) - which(x.local==x)
-    #})
-    
-    # Move last and first peak tighter together. This happens sometimes in case
-    # of tie result
-    #pe.rle = with(rle(pe), lengths[c(1, length(lengths))])
-    #lst = px.fit_cor2[length(px.fit_cor2)]
-    #px.fit_cor2[length(px.fit_cor2)] = ifelse(lst > length(pe) - pe.rle[2] + 1, length(pe) - pe.rle[2] + 1, lst)
-    #px.fit_cor2[1] = ifelse(px.fit_cor2[1] < pe.rle[1], pe.rle[1], px.fit_cor2[1])
     
     if(p)
     {
@@ -346,26 +288,6 @@ round.odd = function (x)
     x
 }
     
-
-#find.borders = function(x) {
-#    x.diff = diff(x)
-#    x.min = min(x) - round(max(x.diff))
-#    x.max = max(x) + round(max(x.diff))
-#    round(c(x.min, zoo::rollmean(x, 2), x.max))
-#}
-
-#.find.spaces = function(pe0, r, x)
-#{
-#    r2 = round(max(diff(x)))
-#    optmin = function(pe) { 
-#        pe = pe > 0; 
-#        round(optim(.75*r2, function(x) pe[round(x)], method="Brent", lower=1, upper=length(pe))$par) 
-#    }    
-#    
-#    m1 = min(x); m2 = max(x);
-#    c(m1-optmin(rev(pe0[(m1-r2):m1])), x, m2 - optmin(pe0[m2:(m2+r2)]))
-#}
-
 .inverse = function(mask)
 {
     mask.inv = mask
@@ -636,7 +558,7 @@ find.pins = function(img.bw, format, r=NULL, p=F, ..., plate.mask=NULL)
 
 parse.file = function()
 {
-    files = list.files("benchmark", pattern=".*\\.JPG$", full.names=T)
+    files = list.files("benchmark2/p28_X200", pattern=".*\\.JPG$", full.names=T)
     for(file in files)
     {
         writeLines(paste0(which(file %in% files), " / ", length(files), ": ", file))
@@ -666,9 +588,18 @@ parse.file = function()
         head(img.ftrs[,color.ftrs])
         img.pca = princomp(img.ftrs[,color.ftrs])
         writeLines(paste0("First compoment explains ", round(100*(img.pca$sdev[1]^2 / sum(img.pca$sdev^2)), 1), "% variance"))
-        img.ftrs$variable = img.pca$scores[,1]
+        img.ftrs$pca1 = img.pca$scores[,1]
         
-        displayf(ret$mask.pins, img.ftrs)
-        displayc(ret$mask.pins, img)
+        png(paste0(file, "_features.png"), width=nrow(ret$mask.pins), height=ncol(ret$mask.pins))
+        displayf(ret$mask.pins, img.ftrs, variable="pca1", method="raster")
+        dev.off()
+        
+        png(paste0(file, "_contour.png"), width=nrow(ret$mask.pins), height=ncol(ret$mask.pins))
+        displayc(ret$mask.pins, img, method="raster")
+        dev.off()
+        
+        
+        data.export = merge(ret$data, img.ftrs, by="label", all.x=T)
+        write.table(data.export, file=paste0(file, "_data.tab"), quote=F, row.names=F, sep="\t", na="")
     }
 }
