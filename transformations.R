@@ -36,6 +36,26 @@ rgb2hsv = function(v)
     v.hsv
 }
 
+.center = function(img) {
+    cx = round(dim(img)[1:2] / 2)
+    if(length(dim(img)) > 2)
+        return(as.numeric(img[cx[1], cx[2]],))
+    else
+        return(as.numeric(img[cx[1], cx[2]]))
+}
+
+.blank = function(img, val=0) {
+    if(length(dim(img)) > 2)
+        img = img[,,1]
+    
+    Image(array(val, dim(img)))
+}
+
+.append = function(l, v) {
+    l[[length(l)+1]] = v
+    l
+}
+
 .inverse = function(mask)
 {
     mask.inv = mask
