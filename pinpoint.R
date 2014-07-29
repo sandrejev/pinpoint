@@ -86,15 +86,15 @@ find.peaks = function(mask, format, r, margin=1, p=F, trace=1)
     px_exp = round(seq(0, by=px.diff_exp, length.out=dim_exp))
     px = px[c(1, which(diff(px) > px.diff_exp/4) + 1)]
         
-    if(length(px) < dim_exp) 
-    {
-        plot(pe, type="l", col="#000000")
-        lines(pe.mean, type="l", col="#FF000066")
-        abline(v=px.orig, col="grey")
-        abline(v=px, col="red")
-        stop(paste0("Didn't find enough candidate peaks for grid detection (", length(px), " < ", dim_exp, ")"))
-    }
-    
+    #if(length(px) < dim_exp) 
+    #{
+    #    plot(pe, type="l", col="#000000")
+    #    lines(pe.mean, type="l", col="#FF000066")
+    #    abline(v=px.orig, col="grey")
+    #    abline(v=px, col="red")
+    #    stop(paste0("Didn't find enough candidate peaks for grid detection (", length(px), " < ", dim_exp, ")"))
+    #}
+        
     peak.select = function(px_m, px_exp) {
         px_exp.tmp = px_exp
         px_fit = rep(NA, length(px_exp))
@@ -108,14 +108,13 @@ find.peaks = function(mask, format, r, margin=1, p=F, trace=1)
         px_fit
     }
     
-    
-    
-    fit.offsets = 1:round(length(pe) / 4)
-    fit.candidates = sapply(fit.offsets, function(o) px - o)
-    px.fit = apply(fit.candidates, 2, peak.select, px_exp=px_exp)
-    px.fit_err = apply(px.fit, 2, function(x) sum((px_exp-x)^2))
-    
-    offset = fit.offsets[which.min(px.fit_err)] 
+    px.fit = list()
+    for(px.start in px)
+        px.fit[[length(px.fit)+1]] = optim(px.start, function(z1.offset, z1.px_exp, z1.px) {
+            res = sum(sapply(z1.px, function(z2, z2.offset, z2.px_exp) { min(abs(z2 - z2.px_exp - z2.offset)) }, z2.px_exp=z1.px_exp, z2.offset=z1.offset)^2)
+            res
+        }, method="SANN", z1.px_exp=px_exp, z1.px=px, lower=0, upper=max(px))
+    offset = px.fit[[which.min(sapply(px.fit, function(z) min(z$value)))]]$par 
     
     px.fit_cor = sapply(1:length(px_exp), function(i, ipem, ioffset, ipx.diff_exp, ipx_exp) {
         x = ipx_exp[i] + ioffset
@@ -130,11 +129,11 @@ find.peaks = function(mask, format, r, margin=1, p=F, trace=1)
         ipem.rle.x = c(0, cumsum(ipem.rle$lengths))
         peak.start = ipem.rle.x[last(which(x.opt >= ipem.rle.x))]
         peak.end = ipem.rle.x[first(which(x.opt <= ipem.rle.x))]
-
         
         x.opt = round((peak.start + peak.end)/2)
         x.opt = ifelse(peak.end >= length(ipem)*0.99, ipem.rle.x[length(ipem.rle.x)-1], x.opt)
         x.opt = ifelse(peak.start <= length(ipem)*0.01, ipem.rle.x[2], x.opt)
+        if(all(ipem[x.local] < 0.05)) x.opt = median(x.local)
         
         return(x.opt)
     }, ipem=pe, ioffset=offset, ipx.diff_exp=px.diff_exp, ipx_exp=px_exp)
@@ -231,7 +230,7 @@ round.odd = function (x)
         writeLines(paste0(format(Sys.time(), "%X"), ": ", text))
 }
 
-.find.spaces = function(pe, px, p=F)
+.find.spaces = function(pe, px, r, p=F)
 {
     pe.rle = rle(pe)
     pe.rle = pe.rle$length[pe.rle$values > .95]
@@ -300,7 +299,6 @@ find.grid = function(img.bw, format, r=NULL, trace=1, p=F, ..., plate.mask=NULL)
     cy = find.peaks(mask, format, r, margin=2, p=p, trace=trace)
     cx = find.peaks(mask, format, r, margin=1, p=p, trace=trace)
 
-
     if(p) {
         .trace("Display detected centers", trace, 1)
         mask.plot = mask
@@ -309,23 +307,24 @@ find.grid = function(img.bw, format, r=NULL, trace=1, p=F, ..., plate.mask=NULL)
         EBImage::display(mask.plot)
     }
     
-    
-    
     mask.inv = .inverse(mask)
-    mask.inv[(max(cx) + round(mean(diff(cx))/2)):nrow(mask),] = 1
-    mask.inv[1:(min(cx) - round(mean(diff(cx))/2)),] = 1
-    mask.inv[,(max(cy) + round(mean(diff(cy))/2)):ncol(mask)] = 1
-    mask.inv[,1:(min(cy) - round(mean(diff(cy))/2))] = 1 
-    mask.inv[(max(cx) + round(mean(diff(cx)))):nrow(mask),] = 0
-    mask.inv[1:(min(cx) - round(mean(diff(cx)))),] = 0
-    mask.inv[,(max(cy) + round(mean(diff(cy)))):ncol(mask)] = 0   
-    mask.inv[,1:(min(cy) - round(mean(diff(cy))))] = 0   
-    sx = .find.spaces(rowMeans(mask.inv), cx, p=T)
-    sy = .find.spaces(colMeans(mask.inv), cy, p=T)
-         
+    mask.plot = mask.inv
+    mask.inv[c(cx-1,cx,cx+1),] = 0
+    mask.inv[,c(cy-1,cy,cy+1)] = 0
+    mask.inv[pmin(nrow(mask), max(cx) + round(mean(diff(cx))/2)):nrow(mask),] = 1
+    mask.inv[1:pmax(1, min(cx) - round(mean(diff(cx))/2)),] = 1
+    mask.inv[,pmin(ncol(mask), max(cy) + round(mean(diff(cy))/2)):ncol(mask)] = 1
+    mask.inv[,1:pmax(1, min(cy) - round(mean(diff(cy))/2))] = 1
+    mask.inv[pmin(nrow(mask), max(cx) + round(mean(diff(cx)))):nrow(mask),] = 0
+    mask.inv[1:pmax(1, min(cx) - round(mean(diff(cx)))),] = 0
+    mask.inv[,pmin(ncol(mask), max(cy) + round(mean(diff(cy)))):ncol(mask)] = 0   
+    mask.inv[,1:pmax(1, min(cy) - round(mean(diff(cy))))] = 0   
+    sx = .find.spaces(rowMeans(mask.inv), cx, r, p=T)
+    sy = .find.spaces(colMeans(mask.inv), cy, r, p=T)
+    
+    display(mask.inv)     
     if(p)
     {
-        mask.plot = mask.inv
         mask.plot[sx, ] = 0
         mask.plot[, sy] = 0
         EBImage::display(mask.plot)
@@ -608,7 +607,7 @@ find.pins = function(img.bw, format, r=NULL, p=F, ..., plate.mask=NULL, trace=1)
 
 parse.file = function()
 {
-    files = list.files("benchmark2/p28_X200_96/", pattern=".*\\.JPG$", full.names=T)
+    files = list.files("benchmark2/BY/", pattern=".*\\.JPG$", full.names=T)
     plate.mask = NULL
     for(file in files)
     {
