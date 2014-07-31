@@ -64,6 +64,17 @@ rgb2hsv = function(v)
     mask.inv
 }
 
+crop = function(mask, img)
+{
+    dim3 = ifelse(length(dim(img)) == 3, dim(img)[3], 1)
+    a = which(mask > 0, arr.ind = T)
+    a.dim = c((max(a[,1])-min(a[,1])+1), (max(a[,2])-min(a[,2])+1), dim3)
+    img.crop = Image(rep(img[mask > 0], dim3), dim=a.dim, colormode=Grayscale)
+    if(class(img) == "Image")
+        colorMode(img.crop) = colorMode(img)
+    
+    img.crop
+}
 
 blur = function(img, size)
 {
@@ -90,6 +101,16 @@ tile2 = function(img.stack, mask.sqr)
     return(mask)
 }
 
+
+makeCrownBrush = function(diam, thickness=6) {
+    d1 = makeBrush(round.odd(diam), 'disc')
+    dk = makeBrush(round.odd(diam-thickness), 'disc')
+    d4 = array(0, dim=dim(d1))
+    z = round((dim(d1)-dim(dk))/2)
+    d4[z[1] + 1:nrow(dk), z[1] + 1:nrow(dk)] = dk
+    d = d1 - d4
+    d/sum(d)
+}
 
 .corner.objects = function(mask)
 {
